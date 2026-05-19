@@ -89,7 +89,8 @@ Pass these via the `args:` field in the dataflow YAML, or directly on the comman
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--xml PATH` | bundled openarm_cell scene | MJCF scene file to load. |
+| `--xml PATH` | unset | MJCF scene file to load. Overrides `--scene` when set. |
+| `--scene NAME` | `cell` | Bundled scene to load when `--xml` is not set. Choices: `cell`, `demo`, `pedestal`, `bimanual`. |
 | `--keyframe NAME` | `home` | Keyframe in the MJCF to reset to on startup. |
 | `--enable-collision` | off | Enable contact/collision detection. Disabled by default to avoid unexpected joint-locking during teleoperation. |
 | `--ctrl` | off | Write incoming positions to `data.ctrl` and step the physics (`mj_step`) to simulate actuator control. The default writes directly to `data.qpos` with `mj_forward`. |
