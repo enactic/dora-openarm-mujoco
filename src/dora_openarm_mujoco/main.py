@@ -55,7 +55,7 @@ arm_right_observation / arm_left_observation : float32[8]
     Observed joint positions (same layout as the inputs) published in response
     to each incoming position command.
 
-camera_wrist_right / camera_wrist_left / camera_head / camera_ceiling : uint8[N]
+camera_wrist_right / camera_wrist_left / camera_head_left / camera_head_right / camera_ceiling : uint8[N]
     JPEG-encoded frames at ~30 Hz.  Only published when ``--render`` is set.
     Each output carries ``metadata={"encoding": "jpeg"}``.
 
@@ -116,14 +116,13 @@ _ARM_DT = 1.0 / _ARM_HZ
 # Camera rendering rate (matches quittable-tick-camera: 33ms ≈ 30Hz)
 _CAM_HZ       = 30
 _CAM_DT       = 1.0 / _CAM_HZ
-_CAM_WIDTH    = 960
-_CAM_HEIGHT   = 600
 _JPEG_QUALITY = 90
 
 _CAMERAS = [
     "camera_wrist_right",
     "camera_wrist_left",
-    "camera_head",
+    "camera_head_left",
+    "camera_head_right",
     "camera_ceiling",
 ]
 
@@ -164,34 +163,39 @@ def _get_arm_qpos(model: mujoco.MjModel, data: mujoco.MjData,
 class CameraRenderer:
     """Offscreen renderer for MuJoCo cameras. Renders to JPEG bytes."""
 
-    def __init__(self, model: mujoco.MjModel, width: int, height: int,
-                 jpeg_quality: int = 90):
-        self.model        = model
-        self.width        = width
-        self.height       = height
+    def __init__(self, model: mujoco.MjModel, jpeg_quality: int = 90):
         self.jpeg_quality = jpeg_quality
-        self.renderer: mujoco.Renderer | None = None
-        try:
-            self.renderer = mujoco.Renderer(model, height=height, width=width)
-        except Exception as e:
-            print(f"[camera] ERROR: could not initialize offscreen renderer: {e}")
-            print("[camera] Camera output will be unavailable.")
-
         self.cam_ids: dict[str, int] = {}
+        self.renderers: dict[str, mujoco.Renderer] = {}
+
+        cam_resolutions: dict[str, tuple[int, int]] = {}
         for cam_name in _CAMERAS:
             cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, cam_name)
-            if cam_id >= 0:
-                self.cam_ids[cam_name] = cam_id
-            else:
+            if cam_id < 0:
                 print(f"[camera] Warning: camera '{cam_name}' not found in model")
+                continue
+            self.cam_ids[cam_name] = cam_id
+            res = model.cam_resolution[cam_id]  # [width, height]
+            cam_resolutions[cam_name] = (int(res[0]), int(res[1]))
+
+        if cam_resolutions:
+            max_w = max(w for w, _ in cam_resolutions.values())
+            max_h = max(h for _, h in cam_resolutions.values())
+            model.vis.global_.offwidth  = max(model.vis.global_.offwidth,  max_w)
+            model.vis.global_.offheight = max(model.vis.global_.offheight, max_h)
+
+        for cam_name, (w, h) in cam_resolutions.items():
+            try:
+                self.renderers[cam_name] = mujoco.Renderer(model, height=h, width=w)
+                print(f"[camera] '{cam_name}' renderer: {w}x{h}")
+            except Exception as e:
+                print(f"[camera] ERROR: could not initialize renderer for '{cam_name}': {e}")
 
     def render_all(self, data: mujoco.MjData) -> dict[str, bytes]:
-        if self.renderer is None:
-            return {}
         images = {}
-        for cam_name, cam_id in self.cam_ids.items():
-            self.renderer.update_scene(data, camera=cam_id)
-            rgb = self.renderer.render()
+        for cam_name, renderer in self.renderers.items():
+            renderer.update_scene(data, camera=self.cam_ids[cam_name])
+            rgb = renderer.render()
             bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
             ok, buf = cv2.imencode(
                 ".jpg", bgr,
@@ -202,9 +206,9 @@ class CameraRenderer:
         return images
 
     def close(self) -> None:
-        if self.renderer is not None:
-            self.renderer.close()
-            self.renderer = None
+        for renderer in self.renderers.values():
+            renderer.close()
+        self.renderers.clear()
 
 
 class CameraScheduler:
@@ -419,7 +423,7 @@ def main() -> None:
 
     cam_scheduler: CameraScheduler | None = None
     if args.render:
-        renderer = CameraRenderer(model, _CAM_WIDTH, _CAM_HEIGHT, _JPEG_QUALITY)
+        renderer = CameraRenderer(model, _JPEG_QUALITY)
         print(f"[camera] Available cameras: {list(renderer.cam_ids.keys())}")
         cam_scheduler = CameraScheduler(renderer, node, data)
 
