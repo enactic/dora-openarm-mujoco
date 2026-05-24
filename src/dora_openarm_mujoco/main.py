@@ -477,6 +477,11 @@ def main() -> None:
     node = dora.Node()
     node.send_output("status", pa.array(["ready"]))
 
+    # Bootstrap initial arm observations so the observer can begin ticking.
+    for side in ("right", "left"):
+        q = _get_arm_qpos(model, data, side)
+        node.send_output(f"arm_{side}_observation", pa.array(q, type=pa.float32()))
+
     cam_scheduler: CameraScheduler | None = None
     if args.render:
         renderer = CameraRenderer(model, _JPEG_QUALITY)
