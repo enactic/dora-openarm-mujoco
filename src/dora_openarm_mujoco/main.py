@@ -92,6 +92,7 @@ CLI arguments (set via ``args:`` in the dataflow YAML)
     Draw the VR controller coordinate frames as coloured arrows in the viewer.
     Only visible when ``--viewer`` is also set.
 """
+
 import argparse
 import signal
 import threading
@@ -105,25 +106,24 @@ import numpy as np
 import openarm_mujoco_v2 as openarm_mujoco
 import pyarrow as pa
 from openarm_mujoco_v2 import JointResolver
-from scipy.spatial.transform import Rotation
-from dora_openarm_mujoco._draw import draw_arrow, draw_frame, draw_world_frame
+from dora_openarm_mujoco._draw import draw_frame, draw_world_frame
 
 _SCENE_RESOLVERS = {
-    "cell":     openarm_mujoco.openarm_cell_xml,
-    "demo":     openarm_mujoco.openarm_demo_xml,
+    "cell": openarm_mujoco.openarm_cell_xml,
+    "demo": openarm_mujoco.openarm_demo_xml,
     "pedestal": openarm_mujoco.openarm_pedestal_xml,
 }
 _DEFAULT_SCENE = "cell"
-_VIEWER_FPS    = 30
-_FRAME_DT     = 1.0 / _VIEWER_FPS
+_VIEWER_FPS = 30
+_FRAME_DT = 1.0 / _VIEWER_FPS
 
 # Arm control rate (matches quittable-tick-leader: 2ms = 500Hz)
 _ARM_HZ = 500
 _ARM_DT = 1.0 / _ARM_HZ
 
 # Camera rendering rate (matches quittable-tick-camera: 33ms ≈ 30Hz)
-_CAM_HZ       = 30
-_CAM_DT       = 1.0 / _CAM_HZ
+_CAM_HZ = 30
+_CAM_DT = 1.0 / _CAM_HZ
 _JPEG_QUALITY = 90
 
 _CAMERAS = [
@@ -140,26 +140,28 @@ _ARM_INPUT_SIDES = {"position_right": "right", "position_left": "left"}
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
+
 def _lock(viewer, fallback: threading.Lock):
     """Return viewer.lock() when the viewer is active, otherwise the fallback lock."""
     if viewer is not None:
         return viewer.lock()
     return fallback
 
+
 # ── observation extraction ─────────────────────────────────────────────────────
 
-def _get_arm_qpos(model: mujoco.MjModel, data: mujoco.MjData,
-                  side: str) -> np.ndarray:
+
+def _get_arm_qpos(model: mujoco.MjModel, data: mujoco.MjData, side: str) -> np.ndarray:
     """Extract current joint positions (7 arm + 1 gripper = 8 elements)."""
     q = np.zeros(8)
     for i in range(1, 8):
         jnt_name = f"openarm_{side}_joint{i}"
-        jnt_id   = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jnt_name)
+        jnt_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jnt_name)
         if jnt_id >= 0:
             q[i - 1] = data.qpos[model.jnt_qposadr[jnt_id]]
 
     grp_name = f"openarm_{side}_finger_joint1"
-    jnt_id   = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, grp_name)
+    jnt_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, grp_name)
     if jnt_id >= 0:
         q[7] = data.qpos[model.jnt_qposadr[jnt_id]]
 
@@ -167,6 +169,7 @@ def _get_arm_qpos(model: mujoco.MjModel, data: mujoco.MjData,
 
 
 # ── offscreen camera rendering ─────────────────────────────────────────────────
+
 
 class CameraRenderer:
     """Offscreen renderer for MuJoCo cameras. Renders to JPEG bytes."""
@@ -189,7 +192,7 @@ class CameraRenderer:
         if cam_resolutions:
             max_w = max(w for w, _ in cam_resolutions.values())
             max_h = max(h for _, h in cam_resolutions.values())
-            model.vis.global_.offwidth  = max(model.vis.global_.offwidth,  max_w)
+            model.vis.global_.offwidth = max(model.vis.global_.offwidth, max_w)
             model.vis.global_.offheight = max(model.vis.global_.offheight, max_h)
 
         for cam_name, (w, h) in cam_resolutions.items():
@@ -197,7 +200,9 @@ class CameraRenderer:
                 self.renderers[cam_name] = mujoco.Renderer(model, height=h, width=w)
                 print(f"[camera] '{cam_name}' renderer: {w}x{h}")
             except Exception as e:
-                print(f"[camera] ERROR: could not initialize renderer for '{cam_name}': {e}")
+                print(
+                    f"[camera] ERROR: could not initialize renderer for '{cam_name}': {e}"
+                )
 
     def render_all(self, data: mujoco.MjData) -> dict[str, bytes]:
         images = {}
@@ -206,8 +211,7 @@ class CameraRenderer:
             rgb = renderer.render()
             bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
             ok, buf = cv2.imencode(
-                ".jpg", bgr,
-                [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
+                ".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
             )
             if ok:
                 images[cam_name] = buf.tobytes()
@@ -224,9 +228,9 @@ class CameraScheduler:
 
     def __init__(self, renderer: CameraRenderer, node: dora.Node, data: mujoco.MjData):
         self._renderer = renderer
-        self._node     = node
-        self._data     = data
-        self._next     = time.perf_counter() + _CAM_DT
+        self._node = node
+        self._data = data
+        self._next = time.perf_counter() + _CAM_DT
 
     def tick(self, lock_fn) -> None:
         if time.perf_counter() < self._next:
@@ -246,6 +250,7 @@ class CameraScheduler:
 
 
 # ── arm event handler ──────────────────────────────────────────────────────────
+
 
 def _handle_arm(
     side: str,
@@ -270,6 +275,7 @@ def _handle_arm(
 
 # ── dora event loop (background thread) ───────────────────────────────────────
 
+
 def _run_dora(
     node: dora.Node,
     model: mujoco.MjModel,
@@ -283,7 +289,7 @@ def _run_dora(
 ) -> None:
     print("[dora] Event loop started.")
     pose_right: np.ndarray | None = None
-    pose_left:  np.ndarray | None = None
+    pose_left: np.ndarray | None = None
 
     try:
         for event in node:
@@ -298,8 +304,15 @@ def _run_dora(
                 values = np.array(event["value"], dtype=np.float32)
                 if values.shape == (8,):
                     _handle_arm(
-                        _ARM_INPUT_SIDES[eid], values,
-                        model, data, mapper, node, viewer, data_lock, use_ctrl,
+                        _ARM_INPUT_SIDES[eid],
+                        values,
+                        model,
+                        data,
+                        mapper,
+                        node,
+                        viewer,
+                        data_lock,
+                        use_ctrl,
                     )
             elif eid == "pose_right":
                 pose_right = np.array(event["value"], dtype=np.float32)
@@ -321,10 +334,11 @@ def _run_dora(
 
 # ── physics + render loop ──────────────────────────────────────────────────────
 
+
 def _run_loop(
     model: mujoco.MjModel,
     data: mujoco.MjData,
-    lock_fn,                              # callable: () → context manager
+    lock_fn,  # callable: () → context manager
     stop_event: threading.Event,
     steps_per_frame: int,
     use_ctrl: bool,
@@ -355,11 +369,12 @@ def _run_loop(
 
 # ── model setup ────────────────────────────────────────────────────────────────
 
+
 def _setup_model(args) -> tuple[mujoco.MjModel, mujoco.MjData, JointResolver]:
     xml_path = args.xml if args.xml is not None else _SCENE_RESOLVERS[args.scene]()
     print(f"[model] Loading scene: {xml_path}")
-    model  = mujoco.MjModel.from_xml_path(xml_path)
-    data   = mujoco.MjData(model)
+    model = mujoco.MjModel.from_xml_path(xml_path)
+    data = mujoco.MjData(model)
     mapper = JointResolver(model)
 
     if not args.enable_collision:
@@ -377,43 +392,68 @@ def _setup_model(args) -> tuple[mujoco.MjModel, mujoco.MjData, JointResolver]:
         if key_id >= 0:
             mujoco.mj_resetDataKeyframe(model, data, key_id)
         else:
-            print(f"[model] Warning: keyframe '{args.keyframe}' not found, using defaults.")
+            print(
+                f"[model] Warning: keyframe '{args.keyframe}' not found, using defaults."
+            )
 
     mujoco.mj_forward(model, data)
 
     if args.ctrl:
         mapper.set_ctrl(data.ctrl, _get_arm_qpos(model, data, "right"), "right")
-        mapper.set_ctrl(data.ctrl, _get_arm_qpos(model, data, "left"),  "left")
+        mapper.set_ctrl(data.ctrl, _get_arm_qpos(model, data, "left"), "left")
 
     return model, data, mapper
 
 
 # ── argument parsing ───────────────────────────────────────────────────────────
 
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Viewer dora node – MuJoCo renderer with camera output for OpenArm"
     )
-    p.add_argument("--xml", default=None,
-                   help="MJCF scene file. Overrides --scene when set.")
-    p.add_argument("--scene", choices=sorted(_SCENE_RESOLVERS), default=_DEFAULT_SCENE,
-                   help=f"Bundled scene to load when --xml is not set (default: {_DEFAULT_SCENE})")
-    p.add_argument("--keyframe", "-k", default="home",
-                   help="Initial keyframe name (default: home)")
-    p.add_argument("--enable-collision", action="store_true",
-                   help="Enable collision detection (default: disabled)")
-    p.add_argument("--ctrl", action="store_true",
-                   help="Write data.ctrl targets and step physics instead of writing data.qpos directly")
-    p.add_argument("--viewer", action="store_true",
-                   help="Open the interactive MuJoCo viewer window (default: off)")
-    p.add_argument("--render", action="store_true",
-                   help="Enable offscreen camera rendering and publish images (default: off)")
-    p.add_argument("--debug-frames", action="store_true",
-                   help="Draw VR controller coordinate frames as overlays in the viewer (default: off)")
+    p.add_argument(
+        "--xml", default=None, help="MJCF scene file. Overrides --scene when set."
+    )
+    p.add_argument(
+        "--scene",
+        choices=sorted(_SCENE_RESOLVERS),
+        default=_DEFAULT_SCENE,
+        help=f"Bundled scene to load when --xml is not set (default: {_DEFAULT_SCENE})",
+    )
+    p.add_argument(
+        "--keyframe", "-k", default="home", help="Initial keyframe name (default: home)"
+    )
+    p.add_argument(
+        "--enable-collision",
+        action="store_true",
+        help="Enable collision detection (default: disabled)",
+    )
+    p.add_argument(
+        "--ctrl",
+        action="store_true",
+        help="Write data.ctrl targets and step physics instead of writing data.qpos directly",
+    )
+    p.add_argument(
+        "--viewer",
+        action="store_true",
+        help="Open the interactive MuJoCo viewer window (default: off)",
+    )
+    p.add_argument(
+        "--render",
+        action="store_true",
+        help="Enable offscreen camera rendering and publish images (default: off)",
+    )
+    p.add_argument(
+        "--debug-frames",
+        action="store_true",
+        help="Draw VR controller coordinate frames as overlays in the viewer (default: off)",
+    )
     return p.parse_args()
 
 
 # ── main ───────────────────────────────────────────────────────────────────────
+
 
 def main() -> None:
     args = _parse_args()
@@ -424,7 +464,7 @@ def main() -> None:
         print(f"[main] Received signal {sig}, shutting down.")
         stop_event.set()
 
-    signal.signal(signal.SIGINT,  _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
 
     model, data, mapper = _setup_model(args)
@@ -443,32 +483,65 @@ def main() -> None:
 
     if args.viewer:
         with mujoco.viewer.launch_passive(model, data) as viewer:
-            viewer.cam.azimuth   = 0
+            viewer.cam.azimuth = 0
             viewer.cam.elevation = -20
-            viewer.cam.distance  = 3.5
+            viewer.cam.distance = 3.5
             viewer.cam.lookat[:] = [1.3, 0, 0.6]
 
             dora_thread = threading.Thread(
                 target=_run_dora,
-                args=(node, model, data, mapper, viewer, data_lock,
-                      stop_event, args.ctrl, args.debug_frames),
+                args=(
+                    node,
+                    model,
+                    data,
+                    mapper,
+                    viewer,
+                    data_lock,
+                    stop_event,
+                    args.ctrl,
+                    args.debug_frames,
+                ),
                 daemon=True,
             )
             dora_thread.start()
-            _run_loop(model, data, viewer.lock, stop_event, steps_per_frame, args.ctrl,
-                      viewer=viewer, cam_scheduler=cam_scheduler)
+            _run_loop(
+                model,
+                data,
+                viewer.lock,
+                stop_event,
+                steps_per_frame,
+                args.ctrl,
+                viewer=viewer,
+                cam_scheduler=cam_scheduler,
+            )
 
     else:
         print("[main] Running headless (no viewer window).")
         dora_thread = threading.Thread(
             target=_run_dora,
-            args=(node, model, data, mapper, None, data_lock,
-                  stop_event, args.ctrl, args.debug_frames),
+            args=(
+                node,
+                model,
+                data,
+                mapper,
+                None,
+                data_lock,
+                stop_event,
+                args.ctrl,
+                args.debug_frames,
+            ),
             daemon=True,
         )
         dora_thread.start()
-        _run_loop(model, data, lambda: data_lock, stop_event, steps_per_frame, args.ctrl,
-                  cam_scheduler=cam_scheduler)
+        _run_loop(
+            model,
+            data,
+            lambda: data_lock,
+            stop_event,
+            steps_per_frame,
+            args.ctrl,
+            cam_scheduler=cam_scheduler,
+        )
 
     if cam_scheduler is not None:
         cam_scheduler.close()

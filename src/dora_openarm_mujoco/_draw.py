@@ -17,15 +17,17 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 
-def draw_arrow(scn, direction: np.ndarray, origin: np.ndarray,
-               color: tuple, size: float) -> None:
+def draw_arrow(
+    scn, direction: np.ndarray, origin: np.ndarray, color: tuple, size: float
+) -> None:
     if scn.ngeom >= scn.maxgeom:
         return
     z = direction / (np.linalg.norm(direction) + 1e-9)
     x = np.array([1.0, 0.0, 0.0])
     if abs(np.dot(z, x)) > 0.99:
         x = np.array([0.0, 1.0, 0.0])
-    y = np.cross(z, x); y /= np.linalg.norm(y)
+    y = np.cross(z, x)
+    y /= np.linalg.norm(y)
     x = np.cross(y, z)
     arrow_mat = np.stack([x, y, z], axis=1)
     center = origin + direction * size / 2
@@ -39,15 +41,15 @@ def draw_arrow(scn, direction: np.ndarray, origin: np.ndarray,
         np.array(color, dtype=np.float32),
     )
     g.size[:] = [0.005, 0.005, size]
-    g.pos[:]  = center
-    g.mat[:]  = arrow_mat
+    g.pos[:] = center
+    g.mat[:] = arrow_mat
     scn.ngeom += 1
 
 
 def draw_world_frame(scn, size: float = 0.3) -> None:
-    draw_arrow(scn, np.array([1., 0., 0.]), np.zeros(3), (1.0, 0.1, 0.1, 1.0), size)
-    draw_arrow(scn, np.array([0., 1., 0.]), np.zeros(3), (0.1, 0.8, 0.1, 1.0), size)
-    draw_arrow(scn, np.array([0., 0., 1.]), np.zeros(3), (0.1, 0.3, 1.0, 1.0), size)
+    draw_arrow(scn, np.array([1.0, 0.0, 0.0]), np.zeros(3), (1.0, 0.1, 0.1, 1.0), size)
+    draw_arrow(scn, np.array([0.0, 1.0, 0.0]), np.zeros(3), (0.1, 0.8, 0.1, 1.0), size)
+    draw_arrow(scn, np.array([0.0, 0.0, 1.0]), np.zeros(3), (0.1, 0.3, 1.0, 1.0), size)
 
 
 def draw_frame(scn, pose: np.ndarray, size: float = 0.08) -> None:
