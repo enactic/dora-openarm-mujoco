@@ -97,3 +97,13 @@ Pass these via the `args:` field in the dataflow YAML, or directly on the comman
 | `--viewer` | off | Open the interactive MuJoCo viewer window. Requires a display. |
 | `--render` | off | Enable offscreen camera rendering and publish JPEG frames. Leave off if cameras are not needed. |
 | `--debug-frames` | off | Draw VR controller poses as coloured arrows in the viewer. Only visible with `--viewer`. |
+
+## License
+
+Licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
+
+Copyright 2026 Enactic, Inc.
+
+## Code of Conduct
+
+All participation in the OpenArm project is governed by our [Code of Conduct](CODE_OF_CONDUCT.md).
