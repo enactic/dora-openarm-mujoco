@@ -107,9 +107,9 @@ import dora
 import mujoco
 import mujoco.viewer
 import numpy as np
-import openarm_mujoco_v2 as openarm_mujoco
+import openarm_mujoco.v2 as openarm_mujoco
 import pyarrow as pa
-from openarm_mujoco_v2 import JointResolver
+from openarm_mujoco.v2 import JointResolver
 
 from dora_openarm_mujoco._draw import draw_frame, draw_world_frame
 
