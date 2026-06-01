@@ -81,9 +81,11 @@ CLI arguments (set via ``args:`` in the dataflow YAML)
     ``data.qpos`` (``mj_forward`` only), which is faster and kinematically
     exact but ignores actuator dynamics.
 
---viewer
-    Open the interactive MuJoCo viewer window.  Requires a display.
-    Headless by default.
+--viewer [FPS]
+    Open the interactive MuJoCo viewer window (default: off).  When FPS is
+    omitted, the target simulation loop frame rate defaults to 30 Hz.  This
+    also sets viewer sync, camera publish checks, and control stepping cadence;
+    in --ctrl mode the effective cadence is snapped to the MuJoCo timestep.
 
 --render
     Enable offscreen camera rendering and publish JPEG frames.  Adds latency;
@@ -95,6 +97,7 @@ CLI arguments (set via ``args:`` in the dataflow YAML)
 """
 
 import argparse
+import math
 import os
 import signal
 import sys
@@ -119,8 +122,7 @@ _SCENE_RESOLVERS = {
     "pedestal": openarm_mujoco.openarm_pedestal_xml,
 }
 _DEFAULT_SCENE = "cell"
-_VIEWER_FPS = 30
-_FRAME_DT = 1.0 / _VIEWER_FPS
+_DEFAULT_VIEWER_FPS = 30.0
 
 # Arm control rate (matches quittable-tick-leader: 2ms = 500Hz)
 _ARM_HZ = 500
@@ -351,6 +353,7 @@ def _run_loop(
     lock_fn,  # callable: () → context manager
     stop_event: threading.Event,
     steps_per_frame: int,
+    loop_dt: float,
     use_ctrl: bool,
     viewer=None,
     cam_scheduler: "CameraScheduler | None" = None,
@@ -373,8 +376,8 @@ def _run_loop(
             cam_scheduler.tick(lock_fn)
 
         elapsed = time.perf_counter() - t0
-        if elapsed < _FRAME_DT:
-            time.sleep(_FRAME_DT - elapsed)
+        if elapsed < loop_dt:
+            time.sleep(loop_dt - elapsed)
 
 
 # ── model setup ────────────────────────────────────────────────────────────────
@@ -418,6 +421,16 @@ def _setup_model(args) -> tuple[mujoco.MjModel, mujoco.MjData, JointResolver]:
 # ── argument parsing ───────────────────────────────────────────────────────────
 
 
+def _positive_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a number") from exc
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive finite number")
+    return parsed
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Viewer dora node – MuJoCo renderer with camera output for OpenArm"
@@ -446,8 +459,18 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--viewer",
-        action="store_true",
-        help="Open the interactive MuJoCo viewer window (default: off)",
+        nargs="?",
+        const=_DEFAULT_VIEWER_FPS,
+        default=None,
+        type=_positive_float,
+        metavar="FPS",
+        help=(
+            "Open the interactive MuJoCo viewer window (default: off). "
+            "Optionally set the target loop frame rate in Hz, which controls "
+            "viewer sync, camera publish checks, and control stepping cadence; "
+            "--ctrl mode snaps the effective cadence to the MuJoCo timestep "
+            f"(default when omitted: {_DEFAULT_VIEWER_FPS:g})"
+        ),
     )
     p.add_argument(
         "--render",
@@ -467,6 +490,7 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    target_fps = args.viewer if args.viewer is not None else _DEFAULT_VIEWER_FPS
 
     stop_event = threading.Event()
 
@@ -478,7 +502,15 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _on_signal)
 
     model, data, mapper = _setup_model(args)
-    steps_per_frame = max(1, int(_FRAME_DT / model.opt.timestep))
+    frame_dt = 1.0 / target_fps
+    steps_per_frame = max(1, math.ceil(frame_dt / model.opt.timestep))
+    loop_dt = steps_per_frame * model.opt.timestep if args.ctrl else frame_dt
+    effective_fps = 1.0 / loop_dt
+    print(
+        f"[loop] target_fps={target_fps:g}, effective_fps={effective_fps:g}, "
+        f"model_timestep={model.opt.timestep:g}, "
+        f"steps_per_frame={steps_per_frame}, loop_dt={loop_dt:g}"
+    )
 
     node = dora.Node()
     node.send_output("status", pa.array(["ready"]))
@@ -496,7 +528,7 @@ def main() -> None:
 
     data_lock = threading.Lock()
 
-    if args.viewer:
+    if args.viewer is not None:
         with mujoco.viewer.launch_passive(model, data) as viewer:
             viewer.cam.azimuth = 0
             viewer.cam.elevation = -20
@@ -525,6 +557,7 @@ def main() -> None:
                 viewer.lock,
                 stop_event,
                 steps_per_frame,
+                loop_dt,
                 args.ctrl,
                 viewer=viewer,
                 cam_scheduler=cam_scheduler,
@@ -554,6 +587,7 @@ def main() -> None:
             lambda: data_lock,
             stop_event,
             steps_per_frame,
+            loop_dt,
             args.ctrl,
             cam_scheduler=cam_scheduler,
         )
