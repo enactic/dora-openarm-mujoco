@@ -82,7 +82,7 @@ CLI arguments (set via ``args:`` in the dataflow YAML)
     exact but ignores actuator dynamics.
 
 --viewer [FPS]
-    Open the interactive MuJoCo viewer window.  When FPS is omitted, the
+    Open the interactive MuJoCo viewer window (default: off).  When FPS is omitted, the
     simulation loop frame rate defaults to 30 Hz.  This also sets viewer sync,
     camera publish checks, and control stepping cadence.
 
