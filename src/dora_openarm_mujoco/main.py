@@ -82,9 +82,10 @@ CLI arguments (set via ``args:`` in the dataflow YAML)
     exact but ignores actuator dynamics.
 
 --viewer [FPS]
-    Open the interactive MuJoCo viewer window (default: off).  When FPS is omitted, the
-    simulation loop frame rate defaults to 30 Hz.  This also sets viewer sync,
-    camera publish checks, and control stepping cadence.
+    Open the interactive MuJoCo viewer window (default: off).  When FPS is
+    omitted, the target simulation loop frame rate defaults to 30 Hz.  This
+    also sets viewer sync, camera publish checks, and control stepping cadence;
+    in --ctrl mode the effective cadence is snapped to the MuJoCo timestep.
 
 --render
     Enable offscreen camera rendering and publish JPEG frames.  Adds latency;
@@ -464,9 +465,10 @@ def _parse_args() -> argparse.Namespace:
         type=_positive_float,
         metavar="FPS",
         help=(
-            "Open the interactive MuJoCo viewer window. Optionally set the loop "
-            "frame rate in Hz, which controls viewer sync, camera publish checks, "
-            "and control stepping cadence "
+            "Open the interactive MuJoCo viewer window (default: off). "
+            "Optionally set the target loop frame rate in Hz, which controls "
+            "viewer sync, camera publish checks, and control stepping cadence; "
+            "--ctrl mode snaps the effective cadence to the MuJoCo timestep "
             f"(default when omitted: {_DEFAULT_VIEWER_FPS:g})"
         ),
     )
@@ -488,7 +490,7 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
-    frame_fps = args.viewer if args.viewer is not None else _DEFAULT_VIEWER_FPS
+    target_fps = args.viewer if args.viewer is not None else _DEFAULT_VIEWER_FPS
 
     stop_event = threading.Event()
 
@@ -500,11 +502,12 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _on_signal)
 
     model, data, mapper = _setup_model(args)
-    frame_dt = 1.0 / frame_fps
+    frame_dt = 1.0 / target_fps
     steps_per_frame = max(1, math.ceil(frame_dt / model.opt.timestep))
     loop_dt = steps_per_frame * model.opt.timestep if args.ctrl else frame_dt
+    effective_fps = 1.0 / loop_dt
     print(
-        f"[loop] frame_fps={frame_fps:g}, "
+        f"[loop] target_fps={target_fps:g}, effective_fps={effective_fps:g}, "
         f"model_timestep={model.opt.timestep:g}, "
         f"steps_per_frame={steps_per_frame}, loop_dt={loop_dt:g}"
     )
