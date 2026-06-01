@@ -83,7 +83,8 @@ CLI arguments (set via ``args:`` in the dataflow YAML)
 
 --viewer [FPS]
     Open the interactive MuJoCo viewer window.  When FPS is omitted, the
-    viewer sync and control stepping rate defaults to 30 Hz.
+    simulation loop frame rate defaults to 30 Hz.  This also sets viewer sync,
+    camera publish checks, and control stepping cadence.
 
 --render
     Enable offscreen camera rendering and publish JPEG frames.  Adds latency;
@@ -95,6 +96,7 @@ CLI arguments (set via ``args:`` in the dataflow YAML)
 """
 
 import argparse
+import math
 import os
 import signal
 import sys
@@ -350,7 +352,7 @@ def _run_loop(
     lock_fn,  # callable: () → context manager
     stop_event: threading.Event,
     steps_per_frame: int,
-    frame_dt: float,
+    loop_dt: float,
     use_ctrl: bool,
     viewer=None,
     cam_scheduler: "CameraScheduler | None" = None,
@@ -373,8 +375,8 @@ def _run_loop(
             cam_scheduler.tick(lock_fn)
 
         elapsed = time.perf_counter() - t0
-        if elapsed < frame_dt:
-            time.sleep(frame_dt - elapsed)
+        if elapsed < loop_dt:
+            time.sleep(loop_dt - elapsed)
 
 
 # ── model setup ────────────────────────────────────────────────────────────────
@@ -418,6 +420,16 @@ def _setup_model(args) -> tuple[mujoco.MjModel, mujoco.MjData, JointResolver]:
 # ── argument parsing ───────────────────────────────────────────────────────────
 
 
+def _positive_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a number") from exc
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive finite number")
+    return parsed
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Viewer dora node – MuJoCo renderer with camera output for OpenArm"
@@ -449,11 +461,13 @@ def _parse_args() -> argparse.Namespace:
         nargs="?",
         const=_DEFAULT_VIEWER_FPS,
         default=None,
-        type=float,
+        type=_positive_float,
         metavar="FPS",
         help=(
-            "Open the interactive MuJoCo viewer window. Optionally set the "
-            f"sync rate in Hz (default when omitted: {_DEFAULT_VIEWER_FPS:g})"
+            "Open the interactive MuJoCo viewer window. Optionally set the loop "
+            "frame rate in Hz, which controls viewer sync, camera publish checks, "
+            "and control stepping cadence "
+            f"(default when omitted: {_DEFAULT_VIEWER_FPS:g})"
         ),
     )
     p.add_argument(
@@ -475,8 +489,6 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     frame_fps = args.viewer if args.viewer is not None else _DEFAULT_VIEWER_FPS
-    if frame_fps <= 0:
-        raise ValueError("--viewer FPS must be positive")
 
     stop_event = threading.Event()
 
@@ -489,10 +501,12 @@ def main() -> None:
 
     model, data, mapper = _setup_model(args)
     frame_dt = 1.0 / frame_fps
-    steps_per_frame = max(1, round(frame_dt / model.opt.timestep))
+    steps_per_frame = max(1, math.ceil(frame_dt / model.opt.timestep))
+    loop_dt = steps_per_frame * model.opt.timestep if args.ctrl else frame_dt
     print(
         f"[loop] frame_fps={frame_fps:g}, "
-        f"model_timestep={model.opt.timestep:g}, steps_per_frame={steps_per_frame}"
+        f"model_timestep={model.opt.timestep:g}, "
+        f"steps_per_frame={steps_per_frame}, loop_dt={loop_dt:g}"
     )
 
     node = dora.Node()
@@ -540,7 +554,7 @@ def main() -> None:
                 viewer.lock,
                 stop_event,
                 steps_per_frame,
-                frame_dt,
+                loop_dt,
                 args.ctrl,
                 viewer=viewer,
                 cam_scheduler=cam_scheduler,
@@ -570,7 +584,7 @@ def main() -> None:
             lambda: data_lock,
             stop_event,
             steps_per_frame,
-            frame_dt,
+            loop_dt,
             args.ctrl,
             cam_scheduler=cam_scheduler,
         )
