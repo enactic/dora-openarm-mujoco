@@ -18,22 +18,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dora-openarm-mujoco"
-version = "0.2.0"
+version = "0.1.0"
 authors = [{name = "Enactic, Inc."}]
-description = "MuJoCo Description Files (MJCF) for OpenArm"
+description = "dora-rs node that simulates OpenArm bimanual robot in MuJoCo"
 license = {text = "Apache-2.0"}
 maintainers = [{name = "Enactic, Inc."}]
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "dora-rs==0.5.0",
-    "dora-rs-cli==0.5.0",
     "mujoco>=3.6.0",
     "numpy",
-    "pyarrow",
-    "scipy",
-    "opencv-python",
     "openarm-mujoco",
+    "opencv-python",
+    "scipy",
 ]
 
 [project.scripts]
