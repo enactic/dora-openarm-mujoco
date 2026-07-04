@@ -49,8 +49,9 @@ pose_right / pose_left : float32[7]
 
 joystick_y : float32[1]
     Joystick Y axis from the VR controller / gamepad (-1..1).  When ``|y|``
-    exceeds ``_RESET_TRIGGER`` the freejoint scene objects (anything other
-    than the arms) are snapped back to the home keyframe.  The trigger is
+    exceeds ``_RESET_TRIGGER`` every scene joint (anything other than the
+    arms) is snapped back to the home keyframe: freejoint objects as well as
+    articulated fixtures such as drawers and doors.  The trigger is
     edge-detected: the stick must return below ``_RESET_REARM`` before the
     next reset can fire.
 
@@ -189,23 +190,35 @@ def _get_arm_qpos(model: mujoco.MjModel, data: mujoco.MjData, side: str) -> np.n
 # ── scene-object reset ─────────────────────────────────────────────────────────
 
 
-def _find_object_freejoint_addrs(model: mujoco.MjModel) -> list[tuple[int, int, str]]:
-    """Find freejoints belonging to non-arm bodies.
+# Per joint type: (qpos width, qvel width).
+_JOINT_WIDTHS = {
+    mujoco.mjtJoint.mjJNT_FREE: (7, 6),
+    mujoco.mjtJoint.mjJNT_BALL: (4, 3),
+    mujoco.mjtJoint.mjJNT_SLIDE: (1, 1),
+    mujoco.mjtJoint.mjJNT_HINGE: (1, 1),
+}
 
-    Returns a list of ``(qpos_addr, qvel_addr, body_name)``.  Bodies whose name
+
+def _find_scene_joint_addrs(model: mujoco.MjModel) -> list[tuple[slice, slice, str]]:
+    """Find joints belonging to non-arm bodies.
+
+    Returns a list of ``(qpos_slice, qvel_slice, name)`` covering freejoint
+    objects and articulated fixtures (drawers, doors, ...).  Bodies whose name
     starts with ``openarm_`` are skipped so the arms are never teleported.
     """
-    addrs: list[tuple[int, int, str]] = []
+    addrs: list[tuple[slice, slice, str]] = []
     for jnt_id in range(model.njnt):
-        if model.jnt_type[jnt_id] != mujoco.mjtJoint.mjJNT_FREE:
-            continue
         body_id = int(model.jnt_bodyid[jnt_id])
         body_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id) or ""
         if body_name.startswith("openarm_"):
             continue
+        nq, nv = _JOINT_WIDTHS[mujoco.mjtJoint(model.jnt_type[jnt_id])]
         qpos_adr = int(model.jnt_qposadr[jnt_id])
         qvel_adr = int(model.jnt_dofadr[jnt_id])
-        addrs.append((qpos_adr, qvel_adr, body_name))
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, jnt_id) or body_name
+        addrs.append(
+            (slice(qpos_adr, qpos_adr + nq), slice(qvel_adr, qvel_adr + nv), name)
+        )
     return addrs
 
 
@@ -213,16 +226,14 @@ def _reset_scene_objects(
     model: mujoco.MjModel,
     data: mujoco.MjData,
     key_id: int,
-    addrs: list[tuple[int, int, str]],
+    addrs: list[tuple[slice, slice, str]],
 ) -> None:
-    """Snap each freejoint object (arms excluded) back to its keyframe pose."""
+    """Snap each scene joint (arms excluded) back to its keyframe pose."""
     if key_id < 0 or not addrs:
         return
-    for qpos_adr, qvel_adr, _ in addrs:
-        data.qpos[qpos_adr : qpos_adr + 7] = model.key_qpos[
-            key_id, qpos_adr : qpos_adr + 7
-        ]
-        data.qvel[qvel_adr : qvel_adr + 6] = 0.0
+    for qpos_sl, qvel_sl, _ in addrs:
+        data.qpos[qpos_sl] = model.key_qpos[key_id, qpos_sl]
+        data.qvel[qvel_sl] = 0.0
     mujoco.mj_forward(model, data)
 
 
@@ -343,7 +354,7 @@ def _run_dora(
     data_lock: threading.Lock,
     stop_event: threading.Event,
     reset_key_id: int,
-    object_addrs: list[tuple[int, int, str]],
+    object_addrs: list[tuple[slice, slice, str]],
     use_ctrl: bool = False,
     debug_frames: bool = False,
 ) -> None:
@@ -450,7 +461,7 @@ def _run_loop(
 def _setup_model(
     args,
 ) -> tuple[
-    mujoco.MjModel, mujoco.MjData, JointResolver, int, list[tuple[int, int, str]]
+    mujoco.MjModel, mujoco.MjData, JointResolver, int, list[tuple[slice, slice, str]]
 ]:
     xml_path = args.xml if args.xml is not None else _SCENE_RESOLVERS[args.scene]()
     print(f"[model] Loading scene: {xml_path}")
@@ -484,13 +495,13 @@ def _setup_model(
         mapper.set_ctrl(data.ctrl, _get_arm_qpos(model, data, "right"), "right")
         mapper.set_ctrl(data.ctrl, _get_arm_qpos(model, data, "left"), "left")
 
-    object_addrs = _find_object_freejoint_addrs(model)
+    object_addrs = _find_scene_joint_addrs(model)
     if object_addrs:
         names = ", ".join(name for _, _, name in object_addrs)
-        print(f"[model] Resettable freejoint objects: {names}")
+        print(f"[model] Resettable scene joints: {names}")
     else:
         print(
-            "[model] No freejoint scene objects found – joystick_y reset will be a no-op."
+            "[model] No non-arm scene joints found – joystick_y reset will be a no-op."
         )
 
     return model, data, mapper, key_id, object_addrs
