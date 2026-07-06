@@ -396,7 +396,7 @@ def _run_dora(
             elif eid == "pose_left":
                 pose_left = np.array(event["value"], dtype=np.float32)
             elif eid == "joystick_y":
-                y = float(np.asarray(event["value"])[0])
+                y = float(np.asarray(event["value"], dtype=np.float32).reshape(-1)[0])
                 if reset_armed and abs(y) >= _RESET_TRIGGER:
                     with _lock(viewer, data_lock):
                         _reset_scene_objects(model, data, reset_key_id, object_addrs)
