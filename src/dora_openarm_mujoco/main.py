@@ -50,10 +50,10 @@ pose_right / pose_left : float32[7]
 joystick_y : float32[1]
     Joystick Y axis from the VR controller / gamepad (-1..1).  When ``|y|``
     exceeds ``_RESET_TRIGGER`` every scene joint (anything other than the
-    arms) is snapped back to the home keyframe: freejoint objects as well as
-    articulated fixtures such as drawers and doors.  The trigger is
-    edge-detected: the stick must return below ``_RESET_REARM`` before the
-    next reset can fire.
+    arms) is snapped back to the ``--keyframe`` pose (default: ``home``):
+    freejoint objects as well as articulated fixtures such as drawers and doors.
+    The trigger is edge-detected: the stick must return below ``_RESET_REARM``
+    before the next reset can fire.
 
 Outputs
 -------
