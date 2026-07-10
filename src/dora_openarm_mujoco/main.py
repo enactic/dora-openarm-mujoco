@@ -383,9 +383,7 @@ def _run_dora(
                     if "qpos" in names:
                         value = extract_values(value, "qpos")
                     else:
-                        value = np.array(
-                        value.field("new_position"), dtype=np.float32
-                        )
+                        value = np.array(value.field("new_position"), dtype=np.float32)
                 values = np.array(value, dtype=np.float32)
                 if values.shape == (8,):
                     _handle_arm(
