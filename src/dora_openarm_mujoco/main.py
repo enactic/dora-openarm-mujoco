@@ -357,7 +357,7 @@ def _run_dora(
     print("[dora] Event loop started.")
     pose_right: np.ndarray | None = None
     pose_left: np.ndarray | None = None
-    reset_armed = True
+    button_x_prev = False
 
     try:
         for event in node:
@@ -393,14 +393,12 @@ def _run_dora(
                 pose_left = np.array(event["value"], dtype=np.float32)
             elif eid == "button_x":
                 pressed = bool(np.asarray(event["value"]).reshape(-1)[0])
-                if reset_armed and pressed:
+                if pressed and not button_x_prev:
                     with _lock(viewer, data_lock):
                         _reset_scene_objects(model, data, reset_key_id, object_addrs)
                     names = ", ".join(name for _, _, name in object_addrs) or "(none)"
                     print(f"[reset] button_x pressed → reset objects: {names}")
-                    reset_armed = False
-                elif not pressed:
-                    reset_armed = True
+                button_x_prev = pressed
 
             if viewer is not None and debug_frames:
                 with viewer.lock():
