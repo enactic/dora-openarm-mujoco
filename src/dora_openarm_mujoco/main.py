@@ -43,8 +43,8 @@ position_right / position_left : float32[8] or struct{new_position: float32[8], 
     finger joint.  Accepts either a plain float32 array or a StructArray
     with a ``new_position`` field.
 
-pose_right / pose_left : float32[7]
-    VR controller pose as [x, y, z, qw, qx, qy, qz].  Only used for the
+pose_right / pose_left : float32[8]
+    VR controller pose as [x, y, z, qw, qx, qy, qz, gripper].  Only used for the
     ``--debug-frames`` overlay; ignored otherwise.
 
 button_x : bool[1]
@@ -154,6 +154,13 @@ _ARM_INPUT_SIDES = {"position_right": "right", "position_left": "left"}
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
+
+
+def extract_values(value: pa.Array, key: str) -> np.ndarray:
+    """Read `key` from a length-1 StructArray, or a flat array as-is."""
+    if pa.types.is_struct(value.type):
+        value = value.field(key)[0].values
+    return np.array(value, dtype=np.float32)
 
 
 def _lock(viewer, fallback: threading.Lock):
@@ -370,10 +377,13 @@ def _run_dora(
 
             if eid in _ARM_INPUT_SIDES:
                 value = event["value"]
+
                 if isinstance(value, pa.StructArray):
-                    value = value.field("new_position")
-                    # TODO: We use this for safety check later.
-                    # other_arm_position = value.field("other_arm_position")
+                    names = value.type.names
+                    if "qpos" in names:
+                        value = extract_values(value, "qpos")
+                    else:
+                        value = np.array(value.field("new_position"), dtype=np.float32)
                 values = np.array(value, dtype=np.float32)
                 if values.shape == (8,):
                     _handle_arm(
@@ -388,9 +398,9 @@ def _run_dora(
                         use_ctrl,
                     )
             elif eid == "pose_right":
-                pose_right = np.array(event["value"], dtype=np.float32)
+                pose_right = extract_values(event["value"], "pose")[:7]
             elif eid == "pose_left":
-                pose_left = np.array(event["value"], dtype=np.float32)
+                pose_left = extract_values(event["value"], "pose")[:7]
             elif eid == "button_x":
                 pressed = bool(np.asarray(event["value"]).reshape(-1)[0])
                 if pressed and not button_x_prev:
