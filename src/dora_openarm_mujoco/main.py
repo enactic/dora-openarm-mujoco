@@ -44,7 +44,7 @@ position_right / position_left : float32[8] or struct{new_position: float32[8], 
     with a ``new_position`` field.
 
 pose_right / pose_left : float32[8]
-    VR controller pose as [x, y, z, qw, qx, qy, qz].  Only used for the
+    VR controller pose as [x, y, z, qw, qx, qy, qz, gripper].  Only used for the
     ``--debug-frames`` overlay; ignored otherwise.
 
 button_x : bool[1]
