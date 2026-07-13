@@ -47,13 +47,13 @@ pose_right / pose_left : float32[7]
     VR controller pose as [x, y, z, qw, qx, qy, qz].  Only used for the
     ``--debug-frames`` overlay; ignored otherwise.
 
-joystick_y : float32[1]
-    Joystick Y axis from the VR controller / gamepad (-1..1).  When ``|y|``
-    exceeds ``_RESET_TRIGGER`` every scene joint (anything other than the
-    arms) is snapped back to the ``--keyframe`` pose (default: ``home``):
-    freejoint objects as well as articulated fixtures such as drawers and doors.
-    The trigger is edge-detected: the stick must return below ``_RESET_REARM``
-    before the next reset can fire.
+button_x : bool[1]
+    X button state from the VR controller.  On press every scene joint
+    (anything other than the arms) is snapped back to the ``--keyframe``
+    pose (default: ``home``): freejoint objects as well as articulated
+    fixtures such as drawers and doors.
+    The trigger is edge-detected: the button must be released before the
+    next reset can fire.
 
 Outputs
 -------
@@ -151,10 +151,6 @@ _CAMERAS = [
 
 # Maps dora input IDs to arm sides for position events.
 _ARM_INPUT_SIDES = {"position_right": "right", "position_left": "left"}
-
-# Joystick-Y → reset-objects thresholds (edge triggered).
-_RESET_TRIGGER = 0.7
-_RESET_REARM = 0.3
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -395,15 +391,15 @@ def _run_dora(
                 pose_right = np.array(event["value"], dtype=np.float32)
             elif eid == "pose_left":
                 pose_left = np.array(event["value"], dtype=np.float32)
-            elif eid == "joystick_y":
-                y = float(np.asarray(event["value"], dtype=np.float32).reshape(-1)[0])
-                if reset_armed and abs(y) >= _RESET_TRIGGER:
+            elif eid == "button_x":
+                pressed = bool(np.asarray(event["value"]).reshape(-1)[0])
+                if reset_armed and pressed:
                     with _lock(viewer, data_lock):
                         _reset_scene_objects(model, data, reset_key_id, object_addrs)
                     names = ", ".join(name for _, _, name in object_addrs) or "(none)"
-                    print(f"[reset] joystick_y={y:+.2f} → reset objects: {names}")
+                    print(f"[reset] button_x pressed → reset objects: {names}")
                     reset_armed = False
-                elif not reset_armed and abs(y) <= _RESET_REARM:
+                elif not pressed:
                     reset_armed = True
 
             if viewer is not None and debug_frames:
@@ -500,9 +496,7 @@ def _setup_model(
         names = ", ".join(name for _, _, name in object_addrs)
         print(f"[model] Resettable scene joints: {names}")
     else:
-        print(
-            "[model] No non-arm scene joints found – joystick_y reset will be a no-op."
-        )
+        print("[model] No non-arm scene joints found – button_x reset will be a no-op.")
 
     return model, data, mapper, key_id, object_addrs
 
