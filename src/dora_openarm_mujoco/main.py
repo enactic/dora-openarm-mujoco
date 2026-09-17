@@ -60,13 +60,15 @@ button_x : bool[1]
 
 request_position : any
     Sample both arms and publish canonical position outputs only. The payload
-    is ignored. Request metadata is preserved except for ``timestamp``, which
-    records the wall-clock snapshot time. No prior command is needed.
+    is ignored. ``observation_timestamp`` records the snapshot time in Unix
+    nanoseconds. Request metadata is preserved except for ``timestamp``, which
+    Dora supplies for the output message. No prior command is needed.
 
 request_state : any
     Sample both arms and publish canonical state outputs only. The payload
-    is ignored. Request metadata is preserved except for ``timestamp``, which
-    records the wall-clock snapshot time shared by all outputs of the request.
+    is ignored. ``observation_timestamp`` records the snapshot time in Unix
+    nanoseconds shared by all outputs of the request. Request metadata is
+    preserved except for ``timestamp``, which Dora supplies for each output.
     No prior command is needed.
     Arm observations are published only in response to these request inputs.
 
@@ -577,7 +579,8 @@ def _run_dora(
                     }
                     snapshot_timestamp = time.time_ns()
                 metadata = dict(event.get("metadata", {}))
-                metadata["timestamp"] = snapshot_timestamp
+                metadata.pop("timestamp", None)
+                metadata["observation_timestamp"] = snapshot_timestamp
                 for side, qpos in positions.items():
                     node.send_output(
                         f"position_{side}",
@@ -592,7 +595,8 @@ def _run_dora(
                     }
                     snapshot_timestamp = time.time_ns()
                 metadata = dict(event.get("metadata", {}))
-                metadata["timestamp"] = snapshot_timestamp
+                metadata.pop("timestamp", None)
+                metadata["observation_timestamp"] = snapshot_timestamp
                 for side, state in states.items():
                     node.send_output(
                         f"state_{side}",

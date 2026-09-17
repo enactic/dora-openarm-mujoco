@@ -68,8 +68,8 @@ uv run dora run dataflow-dummy.yaml
 |----|------|-------------|
 | `move_position_right` | `float32[8]` or `struct{qpos: float32[8]}` | Target joint positions for the right arm: joints 1-7 then the gripper. Legacy `new_position` structs are also accepted. |
 | `move_position_left` | `float32[8]` or `struct{qpos: float32[8]}` | Same layout for the left arm. |
-| `request_position` | any | Sample both arms and publish only `position_*`. The payload is ignored; request metadata is preserved except for `timestamp`, which records the snapshot time. |
-| `request_state` | any | Sample both arms and publish only `state_*`. The payload is ignored; request metadata is preserved except for `timestamp`, which records the snapshot time. |
+| `request_position` | any | Sample both arms and publish only `position_*`. The payload is ignored; `observation_timestamp` records the snapshot time. |
+| `request_state` | any | Sample both arms and publish only `state_*`. The payload is ignored; `observation_timestamp` records the snapshot time. |
 | `pose_right` | `float32[7]` | VR controller pose `[x, y, z, qw, qx, qy, qz]`, expressed in the `--origin-frame` frame (default: the scene's `arm_origin` site). Used only with `--debug-frames`. |
 | `pose_left` | `float32[7]` | Same for the left controller. |
 | `button_x` | `bool[1]` | X button state. Edge-triggered: on press every scene joint on non-arm bodies (freejoint objects plus fixtures like drawers/doors) snaps back to the `--keyframe` pose; with `--randomize-objects` the freejoint objects land at a randomized pose instead. The button must be released to re-arm. |
@@ -104,9 +104,11 @@ velocity, and actuator force.
 Startup publishes `ready`; position commands only update the simulation target.
 Each request samples both arms under one lock.
 After sampling both arms, the node captures one `time.time_ns()` timestamp
-before releasing the lock and uses it for every output of that request.
-This is the wall-clock snapshot time, not the request time or MuJoCo simulation
-time (`data.time`). Other metadata is preserved without modifying the request.
+before releasing the lock and uses it as `observation_timestamp` for every
+output of that request. This is integer Unix wall-clock nanoseconds, not the
+request time or MuJoCo simulation time (`data.time`). Request metadata is copied
+without modification except for `timestamp`, which is removed from the copy so
+Dora supplies each output message timestamp.
 
 To migrate an older dataflow, rename command inputs from `position_*` to
 `move_position_*`, replace MuJoCo's `arm_right_observation` and

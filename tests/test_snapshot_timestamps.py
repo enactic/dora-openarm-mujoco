@@ -75,7 +75,8 @@ class SnapshotTimestampTests(unittest.TestCase):
                 )
                 for call, timestamp in zip(calls, (100, 100, 200, 200)):
                     self.assertEqual(
-                        call.kwargs["metadata"], {**metadata, "timestamp": timestamp}
+                        call.kwargs["metadata"],
+                        {"trace_id": "preserve", "observation_timestamp": timestamp},
                     )
                     if kind == "state":
                         output = call.args[1]
