@@ -29,19 +29,20 @@ Minimal (headless, no cameras)::
       path: dora-openarm-mujoco
       args: "--viewer ..."
       inputs:
-        position_right: leader/follower_position_right
-        position_left:  leader/follower_position_left
+        move_position_right: leader/follower_position_right
+        move_position_left:  leader/follower_position_left
+        request_position: dora/timer/millis/4
       outputs:
         - status
-        - arm_right_observation
-        - arm_left_observation
+        - position_right
+        - position_left
 
 Inputs
 ------
-position_right / position_left : float32[8] or struct{new_position: float32[8], ...}
+move_position_right / move_position_left : float32[8] or struct{qpos: float32[8]}
     Target joint positions for each arm: joints 1–7 followed by the gripper
     finger joint.  Accepts either a plain float32 array or a StructArray
-    with a ``new_position`` field.
+    with a ``qpos`` or ``new_position`` field.
 
 pose_right / pose_left : float32[8]
     VR controller pose as [x, y, z, qw, qx, qy, qz, gripper], expressed in the
@@ -57,14 +58,34 @@ button_x : bool[1]
     The trigger is edge-detected: the button must be released before the
     next reset can fire.
 
+request_position : any
+    Sample both arms and publish canonical position outputs only. The payload
+    is ignored. ``observation_timestamp`` records the snapshot time in Unix
+    nanoseconds. Request metadata is preserved except for ``timestamp``, which
+    Dora supplies for the output message. No prior command is needed.
+
+request_state : any
+    Sample both arms and publish canonical state outputs only. The payload
+    is ignored. ``observation_timestamp`` records the snapshot time in Unix
+    nanoseconds shared by all outputs of the request. Request metadata is
+    preserved except for ``timestamp``, which Dora supplies for each output.
+    No prior command is needed.
+    Arm observations are published only in response to these request inputs.
+
 Outputs
 -------
 status : string["ready"]
     Published once on startup so downstream nodes know the sim is live.
 
-arm_right_observation / arm_left_observation : float32[8]
-    Observed joint positions (same layout as the inputs) published in response
-    to each incoming position command.
+position_right / position_left : struct{qpos: float32[8]}
+    Joint positions sampled on each ``request_position`` event.
+
+state_right / state_left : struct{qpos, qvel, qtorque, tmos, trotor, motor_status, bus}
+    Eight-motor state sampled on each ``request_state`` event: joints 1-7 then
+    finger_joint1. Positions, velocities, and generalized actuator forces come
+    from MuJoCo; the two temperature arrays are int32 zeros. Motor status is
+    ENABLED for existing joints or SILENT for missing joints. Bus diagnostics
+    are simulation placeholders: carrier is true and all fault counters are zero.
 
 camera_wrist_right / camera_wrist_left / camera_head_left / camera_head_right / camera_ceiling : uint8[N]
     JPEG-encoded frames at ~30 Hz.  Only published when ``--render`` is set.
@@ -194,7 +215,32 @@ _CAMERAS = [
 ]
 
 # Maps dora input IDs to arm sides for position events.
-_ARM_INPUT_SIDES = {"position_right": "right", "position_left": "left"}
+_ARM_INPUT_SIDES = {"move_position_right": "right", "move_position_left": "left"}
+
+_QPOS_TYPE = pa.struct([("qpos", pa.list_(pa.float32()))])
+_BUS_TYPE = pa.struct(
+    [
+        ("carrier", pa.bool_()),
+        ("bus_off", pa.int64()),
+        ("error_passive", pa.int64()),
+        ("error_warning", pa.int64()),
+        ("ack_error", pa.int64()),
+        ("tx_overflow", pa.int64()),
+        ("rx_overflow", pa.int64()),
+        ("net_down", pa.int64()),
+    ]
+)
+_STATE_TYPE = pa.struct(
+    [
+        ("qpos", pa.list_(pa.float32())),
+        ("qvel", pa.list_(pa.float32())),
+        ("qtorque", pa.list_(pa.float32())),
+        ("tmos", pa.list_(pa.int32())),
+        ("trotor", pa.list_(pa.int32())),
+        ("motor_status", pa.list_(pa.string())),
+        ("bus", _BUS_TYPE),
+    ]
+)
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -217,21 +263,64 @@ def _lock(viewer, fallback: threading.Lock):
 # ── observation extraction ─────────────────────────────────────────────────────
 
 
+def _get_arm_joint_ids(model: mujoco.MjModel, side: str) -> list[int]:
+    """Resolve joints 1-7 and finger_joint1 in driver order."""
+    joint_names = [f"openarm_{side}_joint{i}" for i in range(1, 8)]
+    joint_names.append(f"openarm_{side}_finger_joint1")
+    return [
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        for name in joint_names
+    ]
+
+
 def _get_arm_qpos(model: mujoco.MjModel, data: mujoco.MjData, side: str) -> np.ndarray:
     """Extract current joint positions (7 arm + 1 gripper = 8 elements)."""
-    q = np.zeros(8)
-    for i in range(1, 8):
-        jnt_name = f"openarm_{side}_joint{i}"
-        jnt_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jnt_name)
-        if jnt_id >= 0:
-            q[i - 1] = data.qpos[model.jnt_qposadr[jnt_id]]
+    qpos = np.zeros(8, dtype=np.float32)
+    for index, joint_id in enumerate(_get_arm_joint_ids(model, side)):
+        if joint_id >= 0:
+            qpos[index] = data.qpos[model.jnt_qposadr[joint_id]]
+    return qpos
 
-    grp_name = f"openarm_{side}_finger_joint1"
-    jnt_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, grp_name)
-    if jnt_id >= 0:
-        q[7] = data.qpos[model.jnt_qposadr[jnt_id]]
 
-    return q.astype(np.float32)
+def _get_arm_state(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    side: str,
+) -> dict[str, object]:
+    """Extract a canonical eight-motor state snapshot for one arm."""
+    qpos = np.zeros(8, dtype=np.float32)
+    qvel = np.zeros(8, dtype=np.float32)
+    qtorque = np.zeros(8, dtype=np.float32)
+    motor_status = ["SILENT"] * 8
+    for index, joint_id in enumerate(_get_arm_joint_ids(model, side)):
+        if joint_id < 0:
+            continue
+        motor_status[index] = "ENABLED"
+        qpos_address = model.jnt_qposadr[joint_id]
+        dof_address = model.jnt_dofadr[joint_id]
+        qpos[index] = data.qpos[qpos_address]
+        qvel[index] = data.qvel[dof_address]
+        qtorque[index] = data.qfrc_actuator[dof_address]
+
+    return {
+        "qpos": qpos,
+        "qvel": qvel,
+        "qtorque": qtorque,
+        "tmos": np.zeros(8, dtype=np.int32),
+        "trotor": np.zeros(8, dtype=np.int32),
+        "motor_status": motor_status,
+        # No CAN bus is simulated; report healthy placeholders.
+        "bus": {
+            "carrier": True,
+            "bus_off": 0,
+            "error_passive": 0,
+            "error_warning": 0,
+            "ack_error": 0,
+            "tx_overflow": 0,
+            "rx_overflow": 0,
+            "net_down": 0,
+        },
+    }
 
 
 # ── scene-object reset ─────────────────────────────────────────────────────────
@@ -415,7 +504,6 @@ def _handle_arm(
     model: mujoco.MjModel,
     data: mujoco.MjData,
     mapper: JointResolver,
-    node: dora.Node,
     viewer,
     data_lock: threading.Lock,
     use_ctrl: bool,
@@ -426,8 +514,6 @@ def _handle_arm(
         else:
             mapper.set_qpos(data.qpos, values, side)
             mujoco.mj_forward(model, data)
-    obs = _get_arm_qpos(model, data, side)
-    node.send_output(f"arm_{side}_observation", pa.array(obs, type=pa.float32()))
 
 
 # ── dora event loop (background thread) ───────────────────────────────────────
@@ -481,10 +567,41 @@ def _run_dora(
                         model,
                         data,
                         mapper,
-                        node,
                         viewer,
                         data_lock,
                         use_ctrl,
+                    )
+            elif eid == "request_position":
+                with _lock(viewer, data_lock):
+                    positions = {
+                        side: _get_arm_qpos(model, data, side)
+                        for side in ("right", "left")
+                    }
+                    snapshot_timestamp = time.time_ns()
+                metadata = dict(event.get("metadata", {}))
+                metadata.pop("timestamp", None)
+                metadata["observation_timestamp"] = snapshot_timestamp
+                for side, qpos in positions.items():
+                    node.send_output(
+                        f"position_{side}",
+                        pa.array([{"qpos": qpos}], type=_QPOS_TYPE),
+                        metadata=metadata,
+                    )
+            elif eid == "request_state":
+                with _lock(viewer, data_lock):
+                    states = {
+                        side: _get_arm_state(model, data, side)
+                        for side in ("right", "left")
+                    }
+                    snapshot_timestamp = time.time_ns()
+                metadata = dict(event.get("metadata", {}))
+                metadata.pop("timestamp", None)
+                metadata["observation_timestamp"] = snapshot_timestamp
+                for side, state in states.items():
+                    node.send_output(
+                        f"state_{side}",
+                        pa.array([state], type=_STATE_TYPE),
+                        metadata=metadata,
                     )
             elif eid == "pose_right":
                 pose_right = extract_values(event["value"], "pose")[:7]
@@ -877,11 +994,6 @@ def main() -> None:
 
     node = dora.Node()
     node.send_output("status", pa.array(["ready"]))
-
-    # Bootstrap initial arm observations so the observer can begin ticking.
-    for side in ("right", "left"):
-        q = _get_arm_qpos(model, data, side)
-        node.send_output(f"arm_{side}_observation", pa.array(q, type=pa.float32()))
 
     cam_scheduler: CameraScheduler | None = None
     if args.render:

@@ -2,7 +2,7 @@
 
 MuJoCo simulation node for the [OpenArm](https://github.com/enactic/openarm_mujoco) bimanual robot, designed to run inside a [dora-rs](https://github.com/dora-rs/dora) dataflow.
 
-It replaces the physical follower arms and cameras: it accepts joint-position commands and publishes arm observations and JPEG camera frames at the same interface as the real hardware.
+It replaces the physical follower arms and cameras: it accepts joint-position commands, publishes canonical arm position/state snapshots on request, and renders JPEG camera frames.
 
 ## Installation
 
@@ -31,12 +31,13 @@ uv run dora run dataflow-dummy.yaml
   build: pip install -e .
   path: dora-openarm-mujoco
   inputs:
-    position_right: leader/follower_position_right
-    position_left:  leader/follower_position_left
+    move_position_right: leader/follower_position_right
+    move_position_left:  leader/follower_position_left
+    request_position: dora/timer/millis/4
   outputs:
     - status
-    - arm_right_observation
-    - arm_left_observation
+    - position_right
+    - position_left
 ```
 
 ### Full (interactive viewer + all cameras, with contacts, can be used for vr teleoperation)
@@ -47,12 +48,13 @@ uv run dora run dataflow-dummy.yaml
   path: dora-openarm-mujoco
   args: "--viewer --render --enable-collision --ctrl --keyframe home"
   inputs:
-    position_right: leader/follower_position_right
-    position_left:  leader/follower_position_left
+    move_position_right: leader/follower_position_right
+    move_position_left:  leader/follower_position_left
+    request_state: dora/timer/millis/4
   outputs:
     - status
-    - arm_right_observation
-    - arm_left_observation
+    - state_right
+    - state_left
     - camera_wrist_right
     - camera_wrist_left
     - camera_head_left
@@ -64,8 +66,10 @@ uv run dora run dataflow-dummy.yaml
 
 | ID | Type | Description |
 |----|------|-------------|
-| `position_right` | `float32[8]` | Target joint positions for the right arm: joints 1–7 then the gripper. ~500 Hz. |
-| `position_left` | `float32[8]` | Same layout for the left arm. |
+| `move_position_right` | `float32[8]` or `struct{qpos: float32[8]}` | Target joint positions for the right arm: joints 1-7 then the gripper. Legacy `new_position` structs are also accepted. |
+| `move_position_left` | `float32[8]` or `struct{qpos: float32[8]}` | Same layout for the left arm. |
+| `request_position` | any | Sample both arms and publish only `position_*`. The payload is ignored; `observation_timestamp` records the snapshot time. |
+| `request_state` | any | Sample both arms and publish only `state_*`. The payload is ignored; `observation_timestamp` records the snapshot time. |
 | `pose_right` | `float32[7]` | VR controller pose `[x, y, z, qw, qx, qy, qz]`, expressed in the `--origin-frame` frame (default: the scene's `arm_origin` site). Used only with `--debug-frames`. |
 | `pose_left` | `float32[7]` | Same for the left controller. |
 | `button_x` | `bool[1]` | X button state. Edge-triggered: on press every scene joint on non-arm bodies (freejoint objects plus fixtures like drawers/doors) snaps back to the `--keyframe` pose; with `--randomize-objects` the freejoint objects land at a randomized pose instead. The button must be released to re-arm. |
@@ -74,8 +78,9 @@ uv run dora run dataflow-dummy.yaml
 
 | ID | Type | Description |
 |----|------|-------------|
-| `arm_right_observation` | `float32[8]` | Observed joint positions, published per incoming command. |
-| `arm_left_observation` | `float32[8]` | Same for the left arm. |
+| `status` | `string[1]` | `ready`, published once on startup. |
+| `position_right`, `position_left` | `struct{qpos: float32[8]}` | Joint positions sampled on each `request_position` event. |
+| `state_right`, `state_left` | struct | Full state sampled on `request_state`: `qpos`, `qvel`, `qtorque` (float32[8]), `tmos`, `trotor` (int32[8]), `motor_status` (string[8]), and `bus` (struct). Torque is MuJoCo generalized actuator force; temperatures are zero placeholders. |
 | `camera_wrist_right` | `uint8[N]` | JPEG frame, ~30 Hz. Requires `--render`. |
 | `camera_wrist_left` | `uint8[N]` | JPEG frame, ~30 Hz. Requires `--render`. |
 | `camera_head_left` | `uint8[N]` | JPEG frame, ~30 Hz. Requires `--render`. |
@@ -83,6 +88,35 @@ uv run dora run dataflow-dummy.yaml
 | `camera_ceiling` | `uint8[N]` | JPEG frame, ~30 Hz. Requires `--render`. |
 
 Camera outputs carry `metadata={"encoding": "jpeg"}`.
+
+State diagnostics are simulation placeholders, not hardware health measurements.
+`motor_status` follows qpos order: joints 1-7 then finger_joint1, with `ENABLED`
+for existing joints and `SILENT` for missing joints. `bus.carrier` is always
+`true` (bool); the cumulative counters `bus_off`, `error_passive`, `error_warning`,
+`ack_error`, `tx_overflow`, `rx_overflow`, and `net_down` are always zero (int64).
+The simulator does not model CAN communication, motor faults, or temperature.
+
+Arm snapshots are published only on `request_position` or `request_state`,
+including before the first position command. Connect the desired request input
+to a timer independent of control outputs. `request_position` publishes only
+`position_*`; `request_state` publishes only `state_*`, which includes qpos,
+velocity, and actuator force.
+Startup publishes `ready`; position commands only update the simulation target.
+Each request samples both arms under one lock.
+After sampling both arms, the node captures one `time.time_ns()` timestamp
+before releasing the lock and uses it as `observation_timestamp` for every
+output of that request. This is integer Unix wall-clock nanoseconds, not the
+request time or MuJoCo simulation time (`data.time`). Request metadata is copied
+without modification except for `timestamp`, which is removed from the copy so
+Dora supplies each output message timestamp.
+
+To migrate an older dataflow, rename command inputs from `position_*` to
+`move_position_*`, replace MuJoCo's `arm_right_observation` and
+`arm_left_observation` outputs with `position_*` or `state_*`, and add a
+`request_position` or `request_state` input. The old output ports have been removed. Consumers receive
+Arrow structs rather than flat arrays. The dummy example connects recorder's
+`arm_right_observation` / `arm_left_observation` inputs to `state_right` /
+`state_left`; these recorder input names remain unchanged.
 
 ## Arguments
 
